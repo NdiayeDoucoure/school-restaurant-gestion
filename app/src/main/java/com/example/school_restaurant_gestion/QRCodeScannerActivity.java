@@ -122,22 +122,21 @@ public class QRCodeScannerActivity extends AppCompatActivity {
     private void handleQRCodeResult(String qrData) {
         try {
             JSONObject json = new JSONObject(qrData);
-            String matricule = json.getString("matricule");
-            int deductionAmount = json.getInt("deductionAmount");
+            String matricule = json.getString("matricule");  // Extraction du matricule du QR code
 
-            callDeductionApi(matricule, deductionAmount);
+            callDeductionApi(matricule);  // Appel de l'API avec le matricule seul
 
         } catch (Exception e) {
             Toast.makeText(this, "QR code invalide.", Toast.LENGTH_SHORT).show();
         }
     }
 
-    private void callDeductionApi(String matricule, int deductionAmount) {
+    private void callDeductionApi(String matricule) {
         new Thread(() -> {
             try {
+                // Créer la requête JSON avec uniquement le matricule
                 JSONObject requestData = new JSONObject();
-                requestData.put("matricule", matricule);
-                requestData.put("deductionAmount", deductionAmount);
+                requestData.put("matricule", matricule);  // Envoi uniquement du matricule
 
                 SharedPreferences sharedPreferences = getSharedPreferences("AppPrefs", MODE_PRIVATE);
                 String token = sharedPreferences.getString("token", "");
@@ -150,7 +149,7 @@ public class QRCodeScannerActivity extends AppCompatActivity {
                 OkHttpClient client = new OkHttpClient();
                 RequestBody body = RequestBody.create(requestData.toString(), MediaType.parse("application/json"));
                 Request request = new Request.Builder()
-                        .url("http://10.0.2.2:5000/api/deduct")
+                        .url("http://10.0.2.2:5000/api/deduct")  // L'URL de l'API de déduction
                         .post(body)
                         .addHeader("Authorization", "Bearer " + token)
                         .build();
