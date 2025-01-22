@@ -1,0 +1,7 @@
+<resources>
+    <string name="app_name">school-restaurant-gestion</string>
+    <string-array name="roles_array">
+        <item>Personnel</item>
+        <item>Etudiant</item>
+    </string-array>
+</resources>
