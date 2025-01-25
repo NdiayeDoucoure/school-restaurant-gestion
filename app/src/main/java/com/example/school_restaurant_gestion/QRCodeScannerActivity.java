@@ -1,10 +1,13 @@
 package com.example.school_restaurant_gestion;
 
 import android.Manifest;
+import android.content.Intent;
 import android.content.SharedPreferences;
 import android.content.pm.PackageManager;
 import android.graphics.ImageFormat;
 import android.os.Bundle;
+import android.os.Handler;
+import android.os.Looper;
 import android.widget.Toast;
 
 import androidx.annotation.NonNull;
@@ -13,6 +16,7 @@ import androidx.camera.core.Camera;
 import androidx.camera.core.CameraSelector;
 import androidx.camera.core.ImageAnalysis;
 import androidx.camera.core.ImageProxy;
+import androidx.camera.core.Preview;
 import androidx.camera.lifecycle.ProcessCameraProvider;
 import androidx.camera.view.PreviewView;
 import androidx.core.app.ActivityCompat;
@@ -21,12 +25,13 @@ import androidx.core.content.ContextCompat;
 import com.google.common.util.concurrent.ListenableFuture;
 import com.google.zxing.BinaryBitmap;
 import com.google.zxing.MultiFormatReader;
+import com.google.zxing.PlanarYUVLuminanceSource;
 import com.google.zxing.Result;
 import com.google.zxing.common.HybridBinarizer;
-import com.google.zxing.PlanarYUVLuminanceSource;
 
 import org.json.JSONObject;
 
+import java.nio.ByteBuffer;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
@@ -40,6 +45,7 @@ public class QRCodeScannerActivity extends AppCompatActivity {
 
     private PreviewView previewView;
     private ExecutorService cameraExecutor;
+    private boolean isProcessing = false;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -49,6 +55,7 @@ public class QRCodeScannerActivity extends AppCompatActivity {
         previewView = findViewById(R.id.previewView);
         cameraExecutor = Executors.newSingleThreadExecutor();
 
+        // Vérification des permissions pour la caméra
         if (ContextCompat.checkSelfPermission(this, Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED) {
             startCamera();
         } else {
@@ -62,58 +69,67 @@ public class QRCodeScannerActivity extends AppCompatActivity {
         cameraProviderFuture.addListener(() -> {
             try {
                 ProcessCameraProvider cameraProvider = cameraProviderFuture.get();
+
+                // Sélection de la caméra arrière
                 CameraSelector cameraSelector = new CameraSelector.Builder()
                         .requireLensFacing(CameraSelector.LENS_FACING_BACK)
                         .build();
 
+                // Configuration du flux
+                Preview preview = new Preview.Builder().build();
+                preview.setSurfaceProvider(previewView.getSurfaceProvider());
+
+                // Configuration de l’analyse d’image
                 ImageAnalysis imageAnalysis = new ImageAnalysis.Builder()
                         .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
                         .build();
 
+                // Assignation de l’analyseur d’images
                 imageAnalysis.setAnalyzer(cameraExecutor, this::analyzeImage);
 
-                cameraProvider.unbindAll();
-
+                // Liaison des use cases à CameraX
                 Camera camera = cameraProvider.bindToLifecycle(
                         this,
                         cameraSelector,
+                        preview,
                         imageAnalysis
                 );
 
             } catch (Exception e) {
-                Toast.makeText(this, "Erreur lors du démarrage de la caméra.", Toast.LENGTH_LONG).show();
+                Toast.makeText(this, "Erreur lors de l'initialisation de la caméra : " + e.getMessage(), Toast.LENGTH_LONG).show();
             }
         }, ContextCompat.getMainExecutor(this));
     }
 
     private void analyzeImage(ImageProxy image) {
+        if (image.getFormat() != ImageFormat.YUV_420_888 || isProcessing) {
+            image.close();
+            return;
+        }
+
+        ByteBuffer yBuffer = image.getPlanes()[0].getBuffer();
+        byte[] yBytes = new byte[yBuffer.remaining()];
+        yBuffer.get(yBytes);
+
+        int width = image.getWidth();
+        int height = image.getHeight();
+
+        PlanarYUVLuminanceSource source = new PlanarYUVLuminanceSource(
+                yBytes, width, height, 0, 0, width, height, false);
+
+        BinaryBitmap bitmap = new BinaryBitmap(new HybridBinarizer(source));
+        MultiFormatReader reader = new MultiFormatReader();
+
         try {
-            if (image.getFormat() == ImageFormat.YUV_420_888)
-            {
-                // Conversion de l'image en un tableau de bytes
-                byte[] data = image.getPlanes()[0].getBuffer().array();
-                int width = image.getWidth();
-                int height = image.getHeight();
-
-                // Création de la source d'image pour ZXing
-                PlanarYUVLuminanceSource source = new PlanarYUVLuminanceSource(
-                        data, width, height, 0, 0, width, height, false);
-
-                BinaryBitmap bitmap = new BinaryBitmap(new HybridBinarizer(source));
-                MultiFormatReader reader = new MultiFormatReader();
-
-                try {
-                    Result result = reader.decode(bitmap);
-
-                    if (result != null) {
-                        runOnUiThread(() -> handleQRCodeResult(result.getText()));
-                    }
-                } catch (Exception e) {
-                    // Si l'image ne contient pas de QR code valide, do nothing
-                }
+            Result result = reader.decode(bitmap);
+            if (result != null) {
+                String qrContent = result.getText();
+                runOnUiThread(() -> {
+                    Toast.makeText(this, "QR code détecté : " + qrContent, Toast.LENGTH_SHORT).show();
+                    handleQRCodeResult(qrContent);
+                });
             }
         } catch (Exception e) {
-            // Gestion des erreurs lors de l'analyse de l'image
         } finally {
             image.close();
         }
@@ -124,10 +140,13 @@ public class QRCodeScannerActivity extends AppCompatActivity {
             JSONObject json = new JSONObject(qrData);
             String matricule = json.getString("matricule");
 
+            // Marquer le traitement en cours - bagn multiple api call
+            isProcessing = true;
             callDeductionApi(matricule);
 
         } catch (Exception e) {
             Toast.makeText(this, "QR code invalide.", Toast.LENGTH_SHORT).show();
+            isProcessing = false;
         }
     }
 
@@ -137,18 +156,19 @@ public class QRCodeScannerActivity extends AppCompatActivity {
                 JSONObject requestData = new JSONObject();
                 requestData.put("matricule", matricule);
 
-                SharedPreferences sharedPreferences = getSharedPreferences("AppPrefs", MODE_PRIVATE);
+                SharedPreferences sharedPreferences = getSharedPreferences("UserSession", MODE_PRIVATE);
                 String token = sharedPreferences.getString("token", "");
 
                 if (token.isEmpty()) {
                     runOnUiThread(() -> Toast.makeText(this, "Token introuvable. Veuillez vous reconnecter.", Toast.LENGTH_SHORT).show());
+                    isProcessing = false;
                     return;
                 }
 
                 OkHttpClient client = new OkHttpClient();
                 RequestBody body = RequestBody.create(requestData.toString(), MediaType.parse("application/json"));
                 Request request = new Request.Builder()
-                        .url("http://10.0.2.2:5000/api/deduct")
+                        .url("http://192.168.1.7:5000/api/deduct")
                         .post(body)
                         .addHeader("Authorization", "Bearer " + token)
                         .build();
@@ -156,14 +176,26 @@ public class QRCodeScannerActivity extends AppCompatActivity {
                 Response response = client.newCall(request).execute();
 
                 if (response.isSuccessful()) {
-                    runOnUiThread(() -> Toast.makeText(this, "Déduction réussie", Toast.LENGTH_SHORT).show());
+                    runOnUiThread(() -> {
+                        Toast.makeText(this, "Déduction réussie", Toast.LENGTH_SHORT).show();
+
+                        // Délai avant de quitter l'écran de scan
+                        new Handler(Looper.getMainLooper()).postDelayed(() -> {
+                            isProcessing = false;
+
+                            startActivity(new Intent(QRCodeScannerActivity.this, MainActivity.class));
+                            finish();
+                        }, 1000);
+                    });
                 } else {
                     String errorMessage = response.body() != null ? response.body().string() : "Erreur inconnue";
                     runOnUiThread(() -> Toast.makeText(this, "Erreur API : " + errorMessage, Toast.LENGTH_LONG).show());
+                    isProcessing = false;
                 }
 
             } catch (Exception e) {
                 runOnUiThread(() -> Toast.makeText(this, "Erreur réseau : " + e.getMessage(), Toast.LENGTH_LONG).show());
+                isProcessing = false;
             }
         }).start();
     }

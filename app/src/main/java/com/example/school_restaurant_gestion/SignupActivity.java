@@ -63,7 +63,7 @@ public class SignupActivity extends AppCompatActivity {
                 .addConverterFactory(GsonConverterFactory.create())
                 .build();
 
-        new Retrofit.Builder().baseUrl("http://10.0.2.2:5000");
+        new Retrofit.Builder().baseUrl("http://192.168.1.7:5000");
 
         JSONObject json = new JSONObject();
         try {
